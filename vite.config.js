@@ -19,6 +19,6 @@ export default defineConfig({
   preview: {
     host: '0.0.0.0',
     port: 5173,
-    allowedHosts: ['moodjournal-1.onrender.com']
+    allowedHosts: ['moodjournal-1-3zva.onrender.com']
   }
 })
