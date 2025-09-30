@@ -39,7 +39,7 @@
                 v-if="dateMoodList[index] && dateMoodList[index].mood === moodList.length - ind  - 1 && dateMoodList[index].currentDate === item.fullDate"
                 :ref="dateMoodList[index] && dateMoodList[index].mood === moodList.length - ind  - 1 && dateMoodList[index].currentDate === item.fullDate ? `anchor${index}` : ''"
                 @click="showContent(dateMoodList[index])">
-                <img :src="dateMoodList[index].moondImg" alt="" class="mood-img">
+                <div class="mood-dot" />
               </div>
             </div>
           </div>
@@ -420,14 +420,11 @@ export default {
               transform: translate(0, -45%);
               cursor: pointer;
 
-              .mood-img {
-                border-radius: 50%;
+              .mood-dot {
                 width: 70px;
                 height: 70px;
-
-                &:hover {
-                  transform: scale(1.1);
-                }
+                border-radius: 50%;
+                background: #000;
               }
             }
           }
