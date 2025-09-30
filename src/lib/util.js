@@ -1,111 +1,102 @@
-const monthMap = {
-  0: "January",
-  1: "February",
-  2: "March",
-  3: "April",
-  4: "May",
-  5: "June",
-  6: "July",
-  7: "August",
-  8: "September",
-  9: "October",
-  10: "November",
-  11: "December",
+// 月份映射
+export const monthMap = {
+  0: "January", 1: "February", 2: "March", 3: "April",
+  4: "May", 5: "June", 6: "July", 7: "August",
+  8: "September", 9: "October", 10: "November", 11: "December",
 };
 
-const dayMap = {
-  0: "Monday",
-  1: "Tuesday",
-  2: "Wednesday",
-  3: "Thursday",
-  4: "Friday",
-  5: "Saturday",
-  6: "Sunday",
+// 一周每天的映射（保持你现有的 1..7 映射以避免连锁变更）
+export const dayMap = {
+  1: "Monday",
+  2: "Tuesday",
+  3: "Wednesday",
+  4: "Thursday",
+  5: "Friday",
+  6: "Saturday",
+  7: "Sunday",
 };
 
-const weekDayMap = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// 一周每天的映射，取前三个字符（0=Sun..6=Sat）
+export const weekDayMap = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-// ---- TZ helpers ----
-const TZ = "America/Toronto";
+/** ---- LOCAL DATE HELPERS (fix UTC parsing) ---- **/
 
-function tzParts(dateLike, tz = TZ) {
-  const d = dateLike ? new Date(dateLike) : new Date();
-  // Extract year, month, day, weekday in the requested time zone
-  const parts = {};
-  for (const { type, value } of new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    weekday: "short",
-    hour12: false,
-  }).formatToParts(d)) {
-    parts[type] = value;
-  }
-  // Map weekday string to index (0=Sun..6=Sat)
-  const weekdayShort =
-    parts.weekday ||
-    new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(
-      d
-    );
-  const weekdayIndex = weekDayMap.indexOf(weekdayShort);
-
-  return {
-    year: Number(parts.year),
-    monthIndex: Number(parts.month) - 1, // 0..11
-    day: Number(parts.day),
-    weekdayIndex, // 0..6, Sun..Sat
-  };
+// Parse 'YYYY-MM-DD' as a **local** date (no UTC shift)
+function parseLocalYMD(ymd) {
+  if (typeof ymd !== "string") return new Date(ymd);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return new Date(ymd);
+  const [, y, mo, d] = m.map(Number);
+  return new Date(y, mo - 1, d);
 }
 
-// Build a UTC Date representing local midnight in the Toronto day
-function tzMidnightUTC(dateLike, tz = TZ) {
-  const { year, monthIndex, day } = tzParts(dateLike, tz);
-  return new Date(Date.UTC(year, monthIndex, day));
+// Return a Date object. If given 'YYYY-MM-DD', force local.
+function localDate(input) {
+  if (typeof input === "string") return parseLocalYMD(input);
+  return new Date(input);
 }
 
-// ---- Public helpers (same names as before, but TZ-aware) ----
+/** ---- Your original API, now using local parsing ---- **/
 
-// yyyy-mm-dd in Toronto time
-function formatDate(date) {
-  const { year, monthIndex, day } = tzParts(date, TZ);
-  const mm = String(monthIndex + 1).padStart(2, "0");
-  const dd = String(day).padStart(2, "0");
-  return `${year}-${mm}-${dd}`;
+// 格式化日期，输出 yyyy-mm-dd（基于本地时间）
+export function formatDate(date) {
+  const d = localDate(date || "");
+  let month = "" + (d.getMonth() + 1);
+  let day = "" + d.getDate();
+  const year = d.getFullYear();
+  if (month.length < 2) month = "0" + month;
+  if (day.length < 2) day = "0" + day;
+  return [year, month, day].join("-");
 }
 
-// { year, month, date, fullDate } in Toronto time
-function getDateInfo(dd) {
-  const { year, monthIndex, day } = tzParts(dd, TZ);
-  const month = String(monthIndex + 1).padStart(2, "0");
-  const date = String(day).padStart(2, "0");
-  return {
-    year,
-    month,
-    date,
-    fullDate: `${year}-${month}-${date}`,
-  };
+// 获取当前的年，月，日（基于本地时间）
+export function getDateInfo(dd) {
+  const d = localDate(dd);
+  let month = "" + (d.getMonth() + 1);
+  let date = "" + d.getDate();
+  const year = d.getFullYear();
+  if (month.length < 2) month = "0" + month;
+  if (date.length < 2) date = "0" + date;
+  const fullDate = `${year}-${month}-${date}`;
+  return { year, month, date, fullDate };
 }
 
-
-function getWeekDates(weekIndex) {
-  const todayMidUTC = tzMidnightUTC(new Date(), TZ);
-  const { weekdayIndex } = tzParts(new Date(), TZ);
-  const sundayUTC = new Date(todayMidUTC);
-  sundayUTC.setUTCDate(sundayUTC.getUTCDate() - weekdayIndex + weekIndex * 7);
-
+// 获取今天所在的周，以及周一到周日对应的日期
+export function getWeekDates(weekIndex) {
+  // today as local
+  const base = new Date();
+  const today = new Date(base.getFullYear(), base.getMonth(), base.getDate()); // strip time
+  const shifted = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000 * weekIndex);
+  const startDayOfWeek = shifted.getDate() - shifted.getDay(); // Sunday start
   const dates = [];
   for (let i = 0; i < 7; i++) {
-    const d = new Date(sundayUTC);
-    d.setUTCDate(sundayUTC.getUTCDate() + i);
-
+    const day = new Date(shifted.getFullYear(), shifted.getMonth(), startDayOfWeek + i);
+    const dateOfMonth = day.getDate().toString().padStart(2, "0");
     dates.push({
-      day: weekDayMap[i],          // label
-      date: getDateInfo(d).date,   // "DD"
-      fullDate: formatDate(d),     // "YYYY-MM-DD"
+      day: weekDayMap[i],
+      date: dateOfMonth,
+      fullDate: getDateInfo(day).fullDate,
     });
   }
   return dates;
 }
 
-export { formatDate, getDateInfo, monthMap, dayMap, getWeekDates };
+/** ---- Minimal global patch so ANY new Date('YYYY-MM-DD') is local ----
+ * This avoids touching all components. It only intercepts the YYYY-MM-DD case.
+ * Safe in the browser; does nothing in SSR-less environments.
+ */
+if (typeof window !== "undefined" && !window.__LOCAL_YMD_DATE_PATCH__) {
+  const NativeDate = Date;
+  function PatchedDate(...args) {
+    if (args.length === 1 && typeof args[0] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args[0])) {
+      return parseLocalYMD(args[0]);
+    }
+    return new NativeDate(...args);
+  }
+  PatchedDate.prototype = NativeDate.prototype;
+  // @ts-ignore
+  window.Date = PatchedDate;
+  // flag so we don’t patch twice (hot reload)
+  // @ts-ignore
+  window.__LOCAL_YMD_DATE_PATCH__ = true;
+}
