@@ -118,35 +118,9 @@ export default {
         obj.mood = 2; 
         obj.sdImage = "";
         console.log("hello before response")
-        // Call the Flask API to generate an image
-        // const response = await fetch('http://127.0.0.1:5000/api/generate-image', {
-        //   method: 'POST',
-        //   headers: {
-        //     'Content-Type': 'application/json',
-        //   },
-        //   body: JSON.stringify({ prompt: obj.content }), // Use the journal content as the prompt
-        // });
-
-        // console.log("response from front end is : " + response)
-
-        // if (!response.ok) {
-        //   throw new Error('Failed to generate image');
-        // }
-
-        //const data = await response.json();
-        //const imageUrl = data.image_url; // Extract the image URL from the response
-
-        // Add the generated image URL to the journal object under the 'sdImage' field
-        //obj.sdImage = imageUrl;
-
-        // Save the updated journal entry (with image) to Firestore
         const docRef = await addDoc(collection(db, 'journalList'), obj);
         obj.id = docRef.id;
-
-        // Add the new journal entry to the local journalList
         this.journalList.unshift(obj);
-
-        // Provide feedback to the user
         this.$message.success('Journal entry saved successfully');
       } catch (error) {
         console.error('Error adding document:', error);
@@ -154,21 +128,26 @@ export default {
       }
     },
 
-
-    async fetchJournalList() {
+    async handleUpdate(obj) {
       try {
-        const userId = auth.currentUser.uid; // Get current user's UID
-        const q = query(
-          collection(db, 'journalList'),
-          orderBy('timestamp', 'desc')
-        );
-        const querySnapshot = await getDocs(q);
-        this.journalList = querySnapshot.docs
-          .map((doc) => ({ id: doc.id, ...doc.data() }))
-          .filter((entry) => entry.userId === userId); // Only include entries from the current user
+        const user = auth.currentUser;
+        if (!user) {
+          this.$message?.error('You must be logged in.');
+          return;
+        }
+        const userId = user.uid;
+        obj.userId = userId;
+        obj.userEmail = user.email || null; // optional
+        obj.timestamp = Date.now();
+        obj.mood = 2;
+        obj.sdImage = "";
+        const docRef = await addDoc(collection(db, 'journalList'), obj);
+        obj.id = docRef.id;
+        this.journalList.unshift(obj);
+        this.$message?.success('Journal entry saved successfully');
       } catch (error) {
-        console.error('Error fetching journalList:', error);
-        this.journalList = [];
+        console.error('Error adding document:', error);
+        this.$message?.error('Failed to save journal entry');
       }
     },
   },
