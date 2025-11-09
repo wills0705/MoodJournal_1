@@ -43,6 +43,7 @@ import {
   addDoc,
   query,
   orderBy,
+  onSnapshot,
 } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 
@@ -56,9 +57,7 @@ export default {
   },
   data() {
     return {
-      journalList: [
-        
-      ],
+      journalList: [],
       tabList: [
         {
           name: 'Write new',
@@ -73,23 +72,27 @@ export default {
           componentName: 'analysis',
         },
       ],
-      activeIndex: 2,
-      currentComponent: 'analysis',
+      activeIndex: 0,
+      currentComponent: 'write',
       isAuthenticated: false,
       showSignup: false,
+      _unsub: null,
     };
   },
   created() {
-    // Monitor authentication state
-     onAuthStateChanged(auth, (user) => {
-       if (user) {
-         this.isAuthenticated = true;
-         this.fetchJournalList();
-       } else {
-         this.isAuthenticated = false;
-         this.journalList = [];
-       }
-     });
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        this.isAuthenticated = true;
+        this.startRealtime();
+      } else {
+        this.isAuthenticated = false;
+        this.journalList = [];
+        this.stopRealtime();
+      }
+    });
+  },
+  beforeUnmount() {
+    this.stopRealtime();
   },
   methods: {
     toggleAuthForm() {
@@ -98,10 +101,10 @@ export default {
     async logout() {
       try {
         await signOut(auth);
-        this.$message.success('Logged out successfully');
+        this.$message?.success('Logged out successfully');
       } catch (error) {
         console.error('Error logging out:', error);
-        this.$message.error('Failed to log out');
+        this.$message?.error('Failed to log out');
       }
     },
     handleClick(index) {
@@ -109,22 +112,41 @@ export default {
       this.currentComponent = this.tabList[index].componentName;
     },
 
-    async handleUpdate(obj) {
+    startRealtime() {
+      this.stopRealtime();
+      const q = query(collection(db, 'journalList'), orderBy('timestamp', 'desc'));
+      this._unsub = onSnapshot(
+        q,
+        (snap) => {
+          const uid = auth.currentUser?.uid;
+          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          // keep only current user's entries (no composite index required)
+          this.journalList = uid ? rows.filter((r) => r.userId === uid) : [];
+        },
+        (err) => {
+          console.error('onSnapshot error:', err);
+          // fallback once if snapshot fails
+          this.fetchJournalList();
+        }
+      );
+    },
+    stopRealtime() {
+      if (this._unsub) {
+        this._unsub();
+        this._unsub = null;
+      }
+    },
+
+    async fetchJournalList() {
       try {
-        // Add user and timestamp metadata
-        const userId = auth.currentUser.uid;
-        obj.userId = userId;
-        obj.timestamp = Date.now();
-        obj.mood = 2; 
-        obj.sdImage = "";
-        console.log("hello before response")
-        const docRef = await addDoc(collection(db, 'journalList'), obj);
-        obj.id = docRef.id;
-        this.journalList.unshift(obj);
-        this.$message.success('Journal entry saved successfully');
+        const uid = auth.currentUser?.uid;
+        const q = query(collection(db, 'journalList'), orderBy('timestamp', 'desc'));
+        const snap = await getDocs(q);
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        this.journalList = uid ? rows.filter((r) => r.userId === uid) : [];
       } catch (error) {
-        console.error('Error adding document:', error);
-        this.$message.error('Failed to save journal entry');
+        console.error('Error fetching journalList:', error);
+        this.journalList = [];
       }
     },
 
@@ -137,7 +159,7 @@ export default {
         }
         const userId = user.uid;
         obj.userId = userId;
-        obj.userEmail = user.email || null; // optional
+        obj.userEmail = user.email;
         obj.timestamp = Date.now();
         obj.mood = 2;
         obj.sdImage = "";
@@ -149,7 +171,7 @@ export default {
         console.error('Error adding document:', error);
         this.$message?.error('Failed to save journal entry');
       }
-    },
+    }
   },
 };
 </script>
