@@ -104,31 +104,15 @@ export default {
           currentTime: d,
           content: this.journalContent.trim(),
           isApproved: false,
-          buttonNumber: this.activeButton
         };
         this.$emit('updateJournal', textObj);
         this.clearText();
       }, SAVE_DELAY);
     },
-    showModal(buttonNumber) {
-      this.modalVisible[buttonNumber] = true;
-      this.activeButton = buttonNumber;
-    },
     async handleModalCancel(i) {
       this.modalVisible[i] = false;
       if (this.activeButton === i) this.activeButton = null;
     },
-    async handleModalOk(buttonNumber) {
-      this.modalVisible[buttonNumber] = false;
-      this.activeButton = buttonNumber;
-      try {
-        const db = getDatabase();
-        const buttonRef = ref(db, 'buttonSelections/' + new Date().getTime());
-        await set(buttonRef, { buttonNumber, timestamp: new Date().toISOString() });
-      } catch (error) {
-        console.error('Error saving button selection:', error);
-      }
-    }
   },
 };
 </script>
