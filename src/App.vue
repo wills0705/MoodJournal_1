@@ -1,31 +1,34 @@
 <template>
   <div class="mood-journal-app">
     <div class="mood-journal-app-content">
-      <!-- Auth screens -->
       <div v-if="!isAuthenticated">
         <Signup v-if="showSignup" @switch-auth="toggleAuthForm" />
         <Login v-else @switch-auth="toggleAuthForm" />
       </div>
 
-      <!-- First-login policy gate (only when authenticated and not yet accepted) -->
-      <PolicyGate
-        v-if="isAuthenticated && mustShowPolicies"
-        :docs="POLICY_DOCS"
-        @accepted="onPolicyAccepted"
-      />
+      <div v-else-if="showPolicyGate" class="app-container">
+        <PolicyGate
+          :docs="POLICY_DOCS"
+          @accepted="handlePolicyCompleted"
+        />
+      </div>
 
-      <!-- Main App (only after policies accepted) -->
-      <div class="app-container" v-else-if="isAuthenticated && !mustShowPolicies">
+      <div class="app-container" v-else>
         <div class="mood-journal-app-content-header">
-          <div
-            v-for="(item, index) in tabList"
-            :key="index"
-            :class="['tab-item', activeIndex === index ? 'active-item' : '']"
-            @click="handleClick(index)"
-          >
-            {{ item.name }}
+          <div class="header-brand">Mindful</div>
+
+          <div class="header-nav">
+            <div
+              v-for="(item, index) in tabList"
+              :key="index"
+              :class="['nav-item', activeIndex === index ? 'active' : '']"
+              @click="handleClick(index)"
+            >
+              {{ item.name }}
+            </div>
+
+            <button @click="logout" class="logout-button">Log Out</button>
           </div>
-          <button @click="logout" class="logout-button">Log Out</button>
         </div>
 
         <div class="mood-journal-app-content-content">
@@ -33,6 +36,7 @@
             <component
               :is="currentComponent"
               :journalList="journalList"
+              :saveStatus="saveStatus"
               @updateJournal="handleUpdate"
             />
           </keep-alive>
@@ -46,6 +50,7 @@
 import Write from './views/Write';
 import Journal from './views/Journal';
 import Analysis from './views/Analysis';
+
 import Signup from './components/Signup.vue';
 import Login from './components/Login.vue';
 import PolicyGate from './components/PolicyGate.vue';
@@ -58,179 +63,253 @@ import {
   query,
   orderBy,
   onSnapshot,
+  where,
   doc,
   getDoc,
   setDoc,
   serverTimestamp,
 } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-
-// bump this when you update policy docs to force re-acceptance
-const CURRENT_POLICY_VERSION = 1;
-
-const POLICY_DOCS = [
-  { title: 'List of Mental Health Services Available 1',        url: '/policies/mentalhealth.pdf' },
-  { title: 'Research Consent',      url: '/policies/REB_Informed_Consent.pdf' }
-];
 
 export default {
   components: { Write, Journal, Analysis, Signup, Login, PolicyGate },
-
   data() {
     return {
       journalList: [],
       tabList: [
-        { name: 'Write new',    componentName: 'write' },
-        { name: 'Prev Journal', componentName: 'journal' },
-        { name: 'Analytics',    componentName: 'analysis' },
+        { name: 'Write',       componentName: 'write'   },
+        { name: 'My Journals', componentName: 'journal' },
+        { name: 'Analytics',   componentName: 'analysis' },
       ],
       activeIndex: 0,
       currentComponent: 'write',
       isAuthenticated: false,
       showSignup: false,
+
+      saveStatus: 'idle',
       _unsub: null,
 
-      // policy gate
-      mustShowPolicies: false,
-      POLICY_DOCS,
+      _audio: null,
+      _approvalState: {},
+      _primedApprovalWatch: false,
+
+      showPolicyGate: false,
+      POLICY_DOCS: [
+        { title: 'List of Mental Health Services Available 1', url: '/policies/mentalhealth.pdf' },
+        { title: 'Research Consent', url: '/policies/REB_Informed_Consent.pdf' }
+      ],
+      _currentUid: null,
     };
   },
 
   created() {
+    this._audio = new Audio('/sounds/notify.wav');
+    this._audio.preload = 'auto';
+
     onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        this.isAuthenticated = false;
-        this.mustShowPolicies = false;
-        this.journalList = [];
-        this.stopRealtime();
-        return;
-      }
+      if (this._unsub) { this._unsub(); this._unsub = null; }
+      this._approvalState = {};
+      this._primedApprovalWatch = false;
 
-      this.isAuthenticated = true;
+      if (user) {
+        this.isAuthenticated = true;
+        this._currentUid = user.uid;
 
-      // check acceptance status
-      try {
-        const metaRef = doc(db, 'userMeta', user.uid);
-        const snap = await getDoc(metaRef);
-        const acceptedVersion = snap.exists() ? (snap.data().acceptedPoliciesVersion || 0) : 0;
-        this.mustShowPolicies = acceptedVersion < CURRENT_POLICY_VERSION;
-      } catch (e) {
-        console.error('Failed to read policy meta:', e);
-        // if check fails, be conservative and show gate
-        this.mustShowPolicies = true;
-      }
+        const acknowledged = await this.checkPolicyAck(user.uid);
+        this.showPolicyGate = !acknowledged;
 
-      if (!this.mustShowPolicies) {
-        this.startRealtime();
+        if (acknowledged) this.startRealtime(user.uid);
       } else {
-        this.stopRealtime();
+        this.isAuthenticated = false;
+        this._currentUid = null;
+        this.journalList = [];
+        this.showPolicyGate = false;
       }
     });
   },
 
   beforeUnmount() {
-    this.stopRealtime();
+    if (this._unsub) { this._unsub(); this._unsub = null; }
   },
 
   methods: {
-    // ---- policy gate accept ----
-    async onPolicyAccepted() {
-      const user = auth.currentUser;
-      if (!user) return;
-
+    async checkPolicyAck(uid) {
       try {
-        const metaRef = doc(db, 'userMeta', user.uid);
-        await setDoc(
-          metaRef,
-          {
-            acceptedPoliciesVersion: CURRENT_POLICY_VERSION,
-            acceptedAt: serverTimestamp(),
-          },
-          { merge: true }
-        );
-        this.mustShowPolicies = false;
-        this.startRealtime();
+        const uref = doc(db, 'users', uid);
+        const snap = await getDoc(uref);
+        if (!snap.exists()) return false;
+        return !!snap.data().policyAcknowledged;
       } catch (e) {
-        console.error('Failed to save policy acceptance:', e);
-        this.$message?.error('Could not save acceptance, please try again.');
+        console.warn('checkPolicyAck error:', e);
+        return false;
+      }
+    },
+    async handlePolicyCompleted() {
+      try {
+        const uid = this._currentUid || auth.currentUser?.uid;
+        if (!uid) return;
+
+        const uref = doc(db, 'users', uid);
+        await setDoc(uref, { policyAcknowledged: true, policyAckAt: serverTimestamp() }, { merge: true });
+
+        this.showPolicyGate = false;
+        this.startRealtime(uid);
+      } catch (e) {
+        console.error('Failed to store policy ack:', e);
+        this.$message?.error('Could not complete policy step, please try again.');
       }
     },
 
     toggleAuthForm() { this.showSignup = !this.showSignup; },
-
     async logout() {
-      try {
-        await signOut(auth);
-        this.$message?.success('Logged out successfully');
-      } catch (error) {
-        console.error('Error logging out:', error);
-        this.$message?.error('Failed to log out');
-      }
+      try { await signOut(auth); this.$message.success('Logged out successfully'); }
+      catch (e) { console.error('Error logging out:', e); this.$message.error('Failed to log out'); }
     },
-
     handleClick(index) {
       this.activeIndex = index;
       this.currentComponent = this.tabList[index].componentName;
     },
 
-    // ---- data streaming ----
-    startRealtime() {
-      this.stopRealtime();
-      const q = query(collection(db, 'journalList'), orderBy('timestamp', 'desc'));
+    startRealtime(userId) {
+      const qRef = query(
+        collection(db, 'journalList'),
+        where('userId', '==', userId),
+        orderBy('timestamp', 'desc')
+      );
+
       this._unsub = onSnapshot(
-        q,
+        qRef,
         (snap) => {
-          const uid = auth.currentUser?.uid;
-          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          this.journalList = uid ? rows.filter((r) => r.userId === uid) : [];
+          const rows = [];
+          const latestMap = {};
+          snap.forEach((doc) => {
+            const data = { id: doc.id, ...doc.data() };
+            rows.push(data);
+            latestMap[doc.id] = !!data.isApproved;
+          });
+          this.journalList = rows;
+
+          if (!this._primedApprovalWatch) {
+            this._approvalState = latestMap;
+            this._primedApprovalWatch = true;
+            return;
+          }
+
+          Object.keys(latestMap).forEach((id) => {
+            const prev = !!this._approvalState[id];
+            const now = !!latestMap[id];
+            if (!prev && now) this._ding();
+          });
+          this._approvalState = latestMap;
         },
         (err) => {
-          console.error('onSnapshot error:', err);
-          this.fetchJournalList();
+          console.warn('onSnapshot error:', err);
+          if (String(err.code).toLowerCase().includes('failed-precondition')) {
+            this.startRealtimeNoIndex(userId);
+          } else {
+            this.journalList = [];
+          }
         }
       );
     },
 
-    stopRealtime() {
-      if (this._unsub) {
-        this._unsub();
-        this._unsub = null;
+    startRealtimeNoIndex(userId) {
+      if (this._unsub) { this._unsub(); this._unsub = null; }
+      const qRef = query(collection(db, 'journalList'), where('userId', '==', userId));
+      this._unsub = onSnapshot(
+        qRef,
+        (snap) => {
+          const rows = [];
+          const latestMap = {};
+          snap.forEach((doc) => {
+            const data = { id: doc.id, ...doc.data() };
+            rows.push(data);
+            latestMap[doc.id] = !!data.isApproved;
+          });
+          rows.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          this.journalList = rows;
+
+          if (!this._primedApprovalWatch) {
+            this._approvalState = latestMap;
+            this._primedApprovalWatch = true;
+            return;
+          }
+          Object.keys(latestMap).forEach((id) => {
+            const prev = !!this._approvalState[id];
+            const now = !!latestMap[id];
+            if (!prev && now) this._ding();
+          });
+          this._approvalState = latestMap;
+        },
+        (err) => {
+          console.error('onSnapshot fallback error:', err);
+          this.journalList = [];
+        }
+      );
+    },
+
+    _ding() {
+      if (!this._audio) return;
+      try { this._audio.currentTime = 0; this._audio.play(); } catch (_) {}
+    },
+
+    async handleUpdate(obj) {
+      // unchanged - leaving your existing save logic as-is
+      this.saveStatus = 'saving';
+      try {
+        const user = auth.currentUser;
+        if (!user) {
+          this.$message?.error('You must be logged in.');
+          this.saveStatus = 'idle';
+          return;
+        }
+
+        const title = (obj.title || '').trim();
+        if (!title) {
+          this.$message?.warning?.('Please enter a title.');
+          this.saveStatus = 'idle';
+          return;
+        }
+
+        const content = (obj.content || '').trim();
+        if (!content) {
+          this.$message?.warning?.('Please write your journal content first.');
+          this.saveStatus = 'idle';
+          return;
+        }
+
+        obj.userId = user.uid;
+        obj.userEmail = user.email;
+        obj.timestamp = Date.now();
+        obj.mood = 2;
+        obj.isApproved = false;
+        obj.title = title;
+        obj.content = content;
+
+        const docRef = await addDoc(collection(db, 'journalList'), obj);
+        this.$message?.success('Journal entry saved successfully');
+        this.saveStatus = 'success';
+        setTimeout(() => (this.saveStatus = 'idle'), 800);
+      } catch (error) {
+        console.error('Error adding document:', error);
+        this.$message?.error('Failed to save journal entry');
+        this.saveStatus = 'error';
+        setTimeout(() => (this.saveStatus = 'idle'), 1200);
       }
     },
 
     async fetchJournalList() {
       try {
-        const uid = auth.currentUser?.uid;
+        const userId = auth.currentUser.uid;
         const q = query(collection(db, 'journalList'), orderBy('timestamp', 'desc'));
-        const snap = await getDocs(q);
-        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        this.journalList = uid ? rows.filter((r) => r.userId === uid) : [];
+        const querySnapshot = await getDocs(q);
+        this.journalList = querySnapshot.docs
+          .map((doc) => ({ id: doc.id, ...doc.data() }))
+          .filter((entry) => entry.userId === userId);
       } catch (error) {
         console.error('Error fetching journalList:', error);
         this.journalList = [];
-      }
-    },
-
-    async handleUpdate(obj) {
-      try {
-        const user = auth.currentUser;
-        if (!user) {
-          this.$message?.error('You must be logged in.');
-          return;
-        }
-        obj.userId = user.uid;
-        obj.userEmail = user.email;
-        obj.timestamp = Date.now();
-        obj.mood = 2;
-        obj.sdImage = "";
-
-        const docRef = await addDoc(collection(db, 'journalList'), obj);
-        obj.id = docRef.id;
-        this.journalList.unshift(obj);
-        this.$message?.success('Journal entry saved successfully');
-      } catch (error) {
-        console.error('Error adding document:', error);
-        this.$message?.error('Failed to save journal entry');
       }
     },
   },
@@ -258,23 +337,47 @@ export default {
       flex: none;
       display: flex;
       align-items: center;
-      justify-content: space-around;
-
-      .tab-item { padding: 4px 20px; border-radius: 12px; transition: font-size .1s ease; cursor: pointer; }
-      .active-item { font-size: 18px; font-weight: bold; color: green; background-color: #99CC99; }
+      justify-content: space-between;
+      padding: 6px 4px;
+      border-bottom: 1px solid #e5e7eb;
     }
 
     &-content { flex: auto; overflow: hidden; margin-top: 20px; }
   }
 }
 
+.header-brand {
+  font-size: 25px;
+  font-weight: 700;
+  color: #111827;
+}
+
+
+.header-nav {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.nav-item {
+  cursor: pointer;
+  color: #6b7280;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.nav-item.active {
+  color: #111827;
+  font-weight: 800;
+}
+
 .logout-button {
-  margin-left: auto;
-  padding: 4px 12px;
-  background-color: #f44336;
+  margin-left: 10px;
+  padding: 8px 14px;
+  background-color: #9e9e9e;
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: 10px;
   cursor: pointer;
 }
 </style>

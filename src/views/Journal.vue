@@ -21,8 +21,12 @@
       <div class="journal-list-content-left">
         <div class="content-title">
           <div class="content-title-text">
-            <div class="month">{{ currentJournal.enDate.slice(0, -5) }}</div>
-            <div class="week">{{ currentJournal.enDate.slice(-4) }}, {{ currentJournal.weekDay }}</div>
+            <div class="month">{{ currentJournal.title }}</div>
+            <div class="week">
+              {{ currentJournal.enDate.slice(0, -5) }},
+              {{ currentJournal.enDate.slice(-4) }},
+              {{ currentJournal.weekDay }}
+            </div>
           </div>
           <div class="content-title-icon">
             <img :src="currentFace" alt="" class="mood-icon" />
@@ -30,9 +34,6 @@
         </div>
 
         <div class="content-container">
-          <div class="content-container-title">
-            {{ currentJournal.title }}
-          </div>
           <div class="content-container-content">
             {{ currentJournal.content }}
           </div>
@@ -52,36 +53,20 @@
             />
           </div>
         </div>
-
-
       </div>
-
-      <!-- Right Panel: AI Image (base64) or fallback cat -->
-      <!-- <div class="journal-list-content-right">
-        <div class="content-img">
-          <img
-            :src="currentJournal.sdImage || fallbackCat"
-            alt="Generated Image"
-            class="ai-img"
-          />
-          <div class="img-text">
-            AI-Generated Image
-          </div>
-        </div>
-      </div> -->
     </div>
   </div>
 </template>
 
 <script>
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { dayMap, monthMap } from '../lib/util';
-import moodSad from '../assets/image/mood-sad.png'
-import moodFrown from '../assets/image/mood-frown.png'
-import moodNormal from '../assets/image/mood-normal.png'
-import moodSmile from '../assets/image/mood-smile.png'
-import moodLaugh from '../assets/image/mood-laugh.png'
+import moodSad from '../assets/image/mood-sad.png';
+import moodFrown from '../assets/image/mood-frown.png';
+import moodNormal from '../assets/image/mood-normal.png';
+import moodSmile from '../assets/image/mood-smile.png';
+import moodLaugh from '../assets/image/mood-laugh.png';
 
 export default {
   name: 'journal',
@@ -101,17 +86,11 @@ export default {
         currentDate: '',
         timestamp: '',
         mood: 2,
-        sdImage: '' // base64 image (data URI) from Firestore
+        sdImage: ''
       },
-      faceList: [
-        moodSad,
-        moodFrown,
-        moodNormal,
-        moodSmile,
-        moodLaugh
-      ],
+      faceList: [moodSad, moodFrown, moodNormal, moodSmile, moodLaugh],
       currentFace: '',
-      fallbackCat: '' // We'll compute in mounted()
+      fallbackCat: ''
     };
   },
   watch: {
@@ -124,23 +103,15 @@ export default {
   },
   methods: {
     faceIconUrl(path) {
-      // Convert relative path to full URL
       return new URL(path, import.meta.url).href;
     },
     setFace(item, index) {
-      // Update local mood & face
       this.currentFace = this.faceIconUrl(item);
       this.currentJournal.mood = index;
-
-      // Persist mood to Firestore
       this.updateJournalMood();
     },
     showJournalDetail(journal) {
-      this.currentJournal = {
-        ...journal
-      };
-
-      // Update face icon based on mood
+      this.currentJournal = { ...journal };
       if (journal.mood >= 0 && journal.mood < this.faceList.length) {
         this.currentFace = this.faceIconUrl(this.faceList[journal.mood]);
       } else {
@@ -157,14 +128,13 @@ export default {
       });
     },
     getWeekDay(ymd) {
-      // ymd: "YYYY-MM-DD" → parse as local date
       const [y, m, d] = String(ymd).split('-').map(Number);
-      const dt = new Date(y, m - 1, d); // local
+      const dt = new Date(y, m - 1, d);
       return dayMap[dt.getDay()];
     },
     formatEnDate(ymd) {
       const [y, m, d] = String(ymd).split('-').map(Number);
-      const dt = new Date(y, m - 1, d); // local
+      const dt = new Date(y, m - 1, d);
       const mon = monthMap[dt.getMonth()].slice(0, 3);
       const dd = String(dt.getDate()).padStart(2, '0');
       return `${mon}.${dd}.${y}`;
@@ -182,7 +152,6 @@ export default {
   },
   mounted() {
     this.filterJournal();
-    // Precompute fallback cat image (relative or public path)
     this.fallbackCat = new URL('../assets/image/cat.jpeg', import.meta.url).href;
     this.currentFace = this.faceIconUrl('../assets/image/mood-normal.png');
   }
@@ -190,6 +159,18 @@ export default {
 </script>
 
 <style lang="less" scoped>
+.pending-message {
+  height: 300px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  font-style: italic;
+  padding: 20px;
+  border: 2px dashed #eee;
+  border-radius: 8px;
+  margin: 20px 0;
+}
 .journal-list {
   height: 100%;
   overflow: hidden;
@@ -224,6 +205,7 @@ export default {
 
       &-date {
         margin-top: 10px;
+        font-size: 13px;
       }
 
       &:last-of-type {
@@ -260,7 +242,7 @@ export default {
 
         &-text {
           .month {
-            font-size: 24px;
+            font-size: 28px;
             font-weight: bold;
           }
 
@@ -357,5 +339,37 @@ export default {
       }
     }
   }
+}
+
+/* Floating refresh UI */
+.refresh-fab {
+  position: fixed;
+  right: 190px;
+  bottom: 50px;
+  z-index: 1000;
+  background: #2d7dfe;
+  color: #fff;
+  border: none;
+  border-radius: 22px;
+  padding: 10px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 14px rgba(0,0,0,0.15);
+  transition: transform .08s ease, box-shadow .2s ease;
+}
+.refresh-fab:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(0,0,0,0.18);
+}
+.refresh-caption {
+  position: fixed;
+  right: 190px;
+  bottom: 24px;
+  z-index: 999;
+  font-size: 12px;
+  color: rgba(0,0,0,0.55);
+  text-align: right;
+  max-width: 400px;
+  line-height: 1.2;
 }
 </style>
