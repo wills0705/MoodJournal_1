@@ -133,7 +133,7 @@ export default {
 }
 
 .journal-write {
-  height: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -266,9 +266,17 @@ export default {
 .footer-right {
   flex: none;
 }
+.footer-row {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.footer-right {
+  flex: none;
+}
 
 .save-btn {
-  margin-left: 1020px;
   width: 140px;
   height: 50px;
   border-radius: 14px;
